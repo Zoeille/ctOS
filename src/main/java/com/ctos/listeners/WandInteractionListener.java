@@ -382,10 +382,14 @@ public class WandInteractionListener implements Listener {
         }
 
         try {
-            persistence.saveIntersection(intersection);
-
             // Re-register with animator to apply changes
             plugin.getAnimator().unregisterIntersection(intersection);
+
+            persistence.saveIntersection(intersection);
+            if (!this.intersectionManager.hasIntersection(intersection.getId())) {
+                this.intersectionManager.registerIntersection(intersection);
+            }
+
             plugin.getAnimator().registerIntersection(intersection);
 
             player.sendMessage(Component.text("[ctOS] Intersection '" + intersection.getName() + "' saved!")
