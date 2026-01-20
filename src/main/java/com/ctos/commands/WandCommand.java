@@ -115,7 +115,7 @@ public class WandCommand {
                 })
                 .build();
         this.plugin.getLifecycleManager().registerEventHandler(LifecycleEvents.COMMANDS, (event ->
-            event.registrar().register(command, "Main ctOS command")
+            event.registrar().register(command, "Main ctOS command", List.of("tl", "trafficlights"))
         ));
     }
 
