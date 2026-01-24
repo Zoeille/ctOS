@@ -18,6 +18,7 @@ public class SetupSession {
     private LightPhase currentPhaseBeingConfigured;
     private List<BlockPosition> selectedBlocksBuffer;
     private List<BlockStateData> selectedStatesBuffer;
+    private List<TrafficLightElement> selectedElementsBuffer; // New: for element-based selection
     private long lastInteractionTime;
 
     public SetupSession(UUID playerId) {
@@ -25,6 +26,7 @@ public class SetupSession {
         this.currentStep = SetupStep.NONE;
         this.selectedBlocksBuffer = new ArrayList<>();
         this.selectedStatesBuffer = new ArrayList<>();
+        this.selectedElementsBuffer = new ArrayList<>();
         this.lastInteractionTime = System.currentTimeMillis();
     }
 
@@ -89,6 +91,21 @@ public class SetupSession {
     }
 
     /**
+     * Adds an element (block or item frame) to the current selection buffer
+     */
+    public void addElementToBuffer(TrafficLightElement element) {
+        // Check if position already exists in buffer
+        ElementPosition pos = element.getPosition();
+        for (TrafficLightElement existing : selectedElementsBuffer) {
+            if (existing.getPosition().equals(pos)) {
+                return; // Already in buffer
+            }
+        }
+        selectedElementsBuffer.add(element);
+        lastInteractionTime = System.currentTimeMillis();
+    }
+
+    /**
      * Confirms the current selection and stores it in the appropriate place
      */
     public void confirmCurrentSelection() {
@@ -96,26 +113,46 @@ public class SetupSession {
             return;
         }
 
-        switch (currentStep) {
-            case SELECT_RED_BLOCKS:
-                currentSideInProgress.setLightBlocks(LightPhase.RED, selectedBlocksBuffer, selectedStatesBuffer);
-                break;
-            case SELECT_ORANGE_BLOCKS:
-                currentSideInProgress.setLightBlocks(LightPhase.ORANGE, selectedBlocksBuffer, selectedStatesBuffer);
-                break;
-            case SELECT_GREEN_BLOCKS:
-                currentSideInProgress.setLightBlocks(LightPhase.GREEN, selectedBlocksBuffer, selectedStatesBuffer);
-                break;
-            case SELECT_PEDESTRIAN_GREEN:
-                if (!selectedBlocksBuffer.isEmpty()) {
+        // Handle element-based selection
+        if (!selectedElementsBuffer.isEmpty()) {
+            switch (currentStep) {
+                case SELECT_RED_BLOCKS:
+                    currentSideInProgress.setLightElements(LightPhase.RED, selectedElementsBuffer);
+                    break;
+                case SELECT_ORANGE_BLOCKS:
+                    currentSideInProgress.setLightElements(LightPhase.ORANGE, selectedElementsBuffer);
+                    break;
+                case SELECT_GREEN_BLOCKS:
+                    currentSideInProgress.setLightElements(LightPhase.GREEN, selectedElementsBuffer);
+                    break;
+                case SELECT_PEDESTRIAN_GREEN:
+                    currentSideInProgress.setPedestrianGreenElements(selectedElementsBuffer);
+                    break;
+                case SELECT_PEDESTRIAN_RED:
+                    currentSideInProgress.setPedestrianRedElements(selectedElementsBuffer);
+                    break;
+            }
+        }
+
+        // Handle legacy block-based selection
+        if (!selectedBlocksBuffer.isEmpty()) {
+            switch (currentStep) {
+                case SELECT_RED_BLOCKS:
+                    currentSideInProgress.setLightBlocks(LightPhase.RED, selectedBlocksBuffer, selectedStatesBuffer);
+                    break;
+                case SELECT_ORANGE_BLOCKS:
+                    currentSideInProgress.setLightBlocks(LightPhase.ORANGE, selectedBlocksBuffer, selectedStatesBuffer);
+                    break;
+                case SELECT_GREEN_BLOCKS:
+                    currentSideInProgress.setLightBlocks(LightPhase.GREEN, selectedBlocksBuffer, selectedStatesBuffer);
+                    break;
+                case SELECT_PEDESTRIAN_GREEN:
                     currentSideInProgress.setPedestrianGreenBlocks(selectedBlocksBuffer, selectedStatesBuffer);
-                }
-                break;
-            case SELECT_PEDESTRIAN_RED:
-                if (!selectedBlocksBuffer.isEmpty()) {
+                    break;
+                case SELECT_PEDESTRIAN_RED:
                     currentSideInProgress.setPedestrianRedBlocks(selectedBlocksBuffer, selectedStatesBuffer);
-                }
-                break;
+                    break;
+            }
         }
 
         clearBuffer();
@@ -128,13 +165,15 @@ public class SetupSession {
     public void clearBuffer() {
         selectedBlocksBuffer.clear();
         selectedStatesBuffer.clear();
+        selectedElementsBuffer.clear();
     }
 
     /**
      * Completes the current side and adds it to the intersection
      */
     public void completeSide() {
-        if (currentSideInProgress != null && currentSideInProgress.isComplete()) {
+        if (currentSideInProgress != null &&
+                (currentSideInProgress.isComplete() || currentSideInProgress.isElementsComplete())) {
             intersectionInProgress.addSide(currentSideInProgress);
             currentSideInProgress = null;
         }
@@ -233,6 +272,27 @@ public class SetupSession {
 
     public int getBufferSize() {
         return selectedBlocksBuffer.size();
+    }
+
+    /**
+     * Gets the number of elements in the selection buffer
+     */
+    public int getElementBufferSize() {
+        return selectedElementsBuffer.size();
+    }
+
+    /**
+     * Gets the total selection count (blocks + elements)
+     */
+    public int getTotalBufferSize() {
+        return selectedBlocksBuffer.size() + selectedElementsBuffer.size();
+    }
+
+    /**
+     * Gets the selected elements buffer
+     */
+    public List<TrafficLightElement> getSelectedElementsBuffer() {
+        return new ArrayList<>(selectedElementsBuffer);
     }
 
     public int getSideCount() {

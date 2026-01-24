@@ -4,7 +4,8 @@ import java.util.*;
 
 /**
  * Represents one side/direction of a traffic light intersection
- * Each side has blocks for red, orange, and green lights, plus optional pedestrian lights
+ * Each side has blocks for red, orange, and green lights, plus optional pedestrian lights.
+ * Supports both blocks and item frames as light elements.
  */
 public class TrafficLightSide {
     /**
@@ -24,6 +25,12 @@ public class TrafficLightSide {
     private List<BlockPosition> pedestrianRedBlocks; // Pedestrian red light blocks
     private Map<BlockPosition, BlockStateData> pedestrianRedBlockStates; // Pedestrian red block states
 
+    // New element-based storage (supports both blocks and item frames)
+    private Map<LightPhase, List<TrafficLightElement>> lightElements;
+    private Map<ElementPosition, TrafficLightElement> elementStates;
+    private List<TrafficLightElement> pedestrianGreenElements;
+    private List<TrafficLightElement> pedestrianRedElements;
+
     public TrafficLightSide(String direction) {
         this.direction = direction;
         this.lightBlocks = new HashMap<>();
@@ -33,9 +40,16 @@ public class TrafficLightSide {
         this.pedestrianRedBlocks = new ArrayList<>();
         this.pedestrianRedBlockStates = new HashMap<>();
 
+        // Initialize element-based storage
+        this.lightElements = new HashMap<>();
+        this.elementStates = new HashMap<>();
+        this.pedestrianGreenElements = new ArrayList<>();
+        this.pedestrianRedElements = new ArrayList<>();
+
         // Initialize empty lists for each phase
         for (LightPhase phase : LightPhase.values()) {
             lightBlocks.put(phase, new ArrayList<>());
+            lightElements.put(phase, new ArrayList<>());
         }
     }
 
@@ -218,6 +232,226 @@ public class TrafficLightSide {
         Map<LightPhase, List<BlockPosition>> copy = new HashMap<>();
         for (Map.Entry<LightPhase, List<BlockPosition>> entry : lightBlocks.entrySet()) {
             copy.put(entry.getKey(), new ArrayList<>(entry.getValue()));
+        }
+        return copy;
+    }
+
+    // ==================== Element-based methods ====================
+
+    /**
+     * Ensures element collections are initialized
+     */
+    private void ensureElementCollectionsInitialized() {
+        if (lightElements == null) {
+            lightElements = new HashMap<>();
+            for (LightPhase phase : LightPhase.values()) {
+                lightElements.put(phase, new ArrayList<>());
+            }
+        }
+        if (elementStates == null) {
+            elementStates = new HashMap<>();
+        }
+        if (pedestrianGreenElements == null) {
+            pedestrianGreenElements = new ArrayList<>();
+        }
+        if (pedestrianRedElements == null) {
+            pedestrianRedElements = new ArrayList<>();
+        }
+    }
+
+    /**
+     * Adds a light element for a specific phase
+     */
+    public void addLightElement(LightPhase phase, TrafficLightElement element) {
+        ensureElementCollectionsInitialized();
+        lightElements.get(phase).add(element);
+        elementStates.put(element.getPosition(), element);
+    }
+
+    /**
+     * Sets the light elements for a specific phase
+     */
+    public void setLightElements(LightPhase phase, List<TrafficLightElement> elements) {
+        ensureElementCollectionsInitialized();
+        lightElements.put(phase, new ArrayList<>(elements));
+        for (TrafficLightElement element : elements) {
+            elementStates.put(element.getPosition(), element);
+        }
+    }
+
+    /**
+     * Gets the light elements for a specific phase
+     */
+    public List<TrafficLightElement> getLightElements(LightPhase phase) {
+        if (lightElements == null || lightElements.get(phase) == null) {
+            return new ArrayList<>();
+        }
+        return new ArrayList<>(lightElements.get(phase));
+    }
+
+    /**
+     * Gets all light elements across all phases
+     */
+    public List<TrafficLightElement> getAllElements() {
+        List<TrafficLightElement> all = new ArrayList<>();
+        if (lightElements != null) {
+            for (List<TrafficLightElement> elements : lightElements.values()) {
+                if (elements != null) {
+                    all.addAll(elements);
+                }
+            }
+        }
+        if (pedestrianGreenElements != null) {
+            all.addAll(pedestrianGreenElements);
+        }
+        if (pedestrianRedElements != null) {
+            all.addAll(pedestrianRedElements);
+        }
+        return all;
+    }
+
+    /**
+     * Gets the element state for a specific position
+     */
+    public TrafficLightElement getElementState(ElementPosition position) {
+        if (elementStates == null) {
+            return null;
+        }
+        return elementStates.get(position);
+    }
+
+    /**
+     * Adds a pedestrian green element
+     */
+    public void addPedestrianGreenElement(TrafficLightElement element) {
+        ensureElementCollectionsInitialized();
+        pedestrianGreenElements.add(element);
+        elementStates.put(element.getPosition(), element);
+    }
+
+    /**
+     * Sets all pedestrian green elements
+     */
+    public void setPedestrianGreenElements(List<TrafficLightElement> elements) {
+        ensureElementCollectionsInitialized();
+        this.pedestrianGreenElements = new ArrayList<>(elements);
+        for (TrafficLightElement element : elements) {
+            elementStates.put(element.getPosition(), element);
+        }
+    }
+
+    /**
+     * Gets all pedestrian green elements
+     */
+    public List<TrafficLightElement> getPedestrianGreenElements() {
+        if (pedestrianGreenElements == null) {
+            return new ArrayList<>();
+        }
+        return new ArrayList<>(pedestrianGreenElements);
+    }
+
+    /**
+     * Adds a pedestrian red element
+     */
+    public void addPedestrianRedElement(TrafficLightElement element) {
+        ensureElementCollectionsInitialized();
+        pedestrianRedElements.add(element);
+        elementStates.put(element.getPosition(), element);
+    }
+
+    /**
+     * Sets all pedestrian red elements
+     */
+    public void setPedestrianRedElements(List<TrafficLightElement> elements) {
+        ensureElementCollectionsInitialized();
+        this.pedestrianRedElements = new ArrayList<>(elements);
+        for (TrafficLightElement element : elements) {
+            elementStates.put(element.getPosition(), element);
+        }
+    }
+
+    /**
+     * Gets all pedestrian red elements
+     */
+    public List<TrafficLightElement> getPedestrianRedElements() {
+        if (pedestrianRedElements == null) {
+            return new ArrayList<>();
+        }
+        return new ArrayList<>(pedestrianRedElements);
+    }
+
+    /**
+     * Checks if this side has any elements (blocks or item frames)
+     */
+    public boolean hasElements() {
+        if (lightElements == null) {
+            return false;
+        }
+        for (List<TrafficLightElement> elements : lightElements.values()) {
+            if (elements != null && !elements.isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Checks if this side has complete element-based configuration
+     * (at least one element for each light phase)
+     */
+    public boolean isElementsComplete() {
+        if (lightElements == null) {
+            return false;
+        }
+        for (LightPhase phase : LightPhase.values()) {
+            List<TrafficLightElement> elements = lightElements.get(phase);
+            if (elements == null || elements.isEmpty()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Checks if this side has pedestrian elements
+     */
+    public boolean hasPedestrianElements() {
+        return pedestrianGreenElements != null && !pedestrianGreenElements.isEmpty()
+            && pedestrianRedElements != null && !pedestrianRedElements.isEmpty();
+    }
+
+    /**
+     * Gets all element positions
+     */
+    public Set<ElementPosition> getAllElementPositions() {
+        if (elementStates == null) {
+            return new HashSet<>();
+        }
+        return new HashSet<>(elementStates.keySet());
+    }
+
+    /**
+     * Gets the element states map
+     */
+    public Map<ElementPosition, TrafficLightElement> getElementStates() {
+        if (elementStates == null) {
+            return new HashMap<>();
+        }
+        return new HashMap<>(elementStates);
+    }
+
+    /**
+     * Gets the light elements map
+     */
+    public Map<LightPhase, List<TrafficLightElement>> getLightElementsMap() {
+        Map<LightPhase, List<TrafficLightElement>> copy = new HashMap<>();
+        if (lightElements == null) {
+            return copy;
+        }
+        for (Map.Entry<LightPhase, List<TrafficLightElement>> entry : lightElements.entrySet()) {
+            if (entry.getValue() != null) {
+                copy.put(entry.getKey(), new ArrayList<>(entry.getValue()));
+            }
         }
         return copy;
     }

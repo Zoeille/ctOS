@@ -14,15 +14,16 @@ public enum SetupStep {
     NAME_INTERSECTION("Type the name of your intersection in chat", true),
 
     // Neutral block selection
-    SELECT_NEUTRAL_BLOCK("Right-click a block to set as the neutral (OFF) state", false),
+    SELECT_NEUTRAL_BLOCK("Right-click a block or item frame to set as the neutral (OFF) state", false),
 
     // Side configuration
     START_SIDE("Starting configuration for a new side", false),
-    SELECT_RED_BLOCKS("Right-click blocks for RED light, then left-click to confirm", false),
-    SELECT_ORANGE_BLOCKS("Right-click blocks for ORANGE light, then left-click to confirm", false),
-    SELECT_GREEN_BLOCKS("Right-click blocks for GREEN light, then left-click to confirm", false),
-    SELECT_PEDESTRIAN_GREEN("Right-click blocks for PEDESTRIAN GREEN lights (optional), then left-click to confirm or skip", false),
-    SELECT_PEDESTRIAN_RED("Right-click blocks for PEDESTRIAN RED lights (optional), then left-click to confirm or skip", false),
+    CONFIRM_DIRECTION("Type 'ok' to confirm direction, or type 'north', 'south', 'east', 'west' to change", true),
+    SELECT_RED_BLOCKS("Right-click blocks/item frames for RED light, then left-click to confirm", false),
+    SELECT_ORANGE_BLOCKS("Right-click blocks/item frames for ORANGE light, then left-click to confirm", false),
+    SELECT_GREEN_BLOCKS("Right-click blocks/item frames for GREEN light, then left-click to confirm", false),
+    SELECT_PEDESTRIAN_GREEN("Right-click blocks/item frames for PEDESTRIAN GREEN (optional), then left-click to confirm or skip", false),
+    SELECT_PEDESTRIAN_RED("Right-click blocks/item frames for PEDESTRIAN RED (optional), then left-click to confirm or skip", false),
     CONFIRM_SIDE("Side configured. Type 'next' to add another side, or 'done' to finish sides", true),
 
     // Timing configuration
@@ -62,6 +63,8 @@ public enum SetupStep {
             case SELECT_NEUTRAL_BLOCK:
                 return START_SIDE;
             case START_SIDE:
+                return CONFIRM_DIRECTION;
+            case CONFIRM_DIRECTION:
                 return SELECT_RED_BLOCKS;
             case SELECT_RED_BLOCKS:
                 return SELECT_ORANGE_BLOCKS;

@@ -10,7 +10,8 @@ public class Intersection {
     private String name;
     private List<TrafficLightSide> sides;
     private TimingConfiguration timing;
-    private BlockStateData neutralState; // The "off" state block
+    private BlockStateData neutralState; // The "off" state block (legacy, for blocks)
+    private TrafficLightElement neutralElement; // The "off" state element (for both blocks and item frames)
     private int currentPhaseIndex;
     private long lastPhaseChangeTime;
 
@@ -46,15 +47,15 @@ public class Intersection {
             return false;
         }
 
-        // All sides must be complete
+        // All sides must be complete (either block-based or element-based)
         for (TrafficLightSide side : sides) {
-            if (!side.isComplete()) {
+            if (!side.isComplete() && !side.isElementsComplete()) {
                 return false;
             }
         }
 
-        // Must have neutral state defined
-        if (neutralState == null) {
+        // Must have neutral state or neutral element defined
+        if (neutralState == null && neutralElement == null) {
             return false;
         }
 
@@ -227,5 +228,38 @@ public class Intersection {
 
     public void setLastPhaseChangeTime(long lastPhaseChangeTime) {
         this.lastPhaseChangeTime = lastPhaseChangeTime;
+    }
+
+    public TrafficLightElement getNeutralElement() {
+        return neutralElement;
+    }
+
+    public void setNeutralElement(TrafficLightElement neutralElement) {
+        this.neutralElement = neutralElement;
+    }
+
+    /**
+     * Gets all element positions managed by this intersection
+     */
+    public Set<ElementPosition> getAllElementPositions() {
+        Set<ElementPosition> allPositions = new HashSet<>();
+
+        for (TrafficLightSide side : sides) {
+            allPositions.addAll(side.getAllElementPositions());
+        }
+
+        return allPositions;
+    }
+
+    /**
+     * Checks if this intersection has any element-based configuration
+     */
+    public boolean hasElements() {
+        for (TrafficLightSide side : sides) {
+            if (side.hasElements()) {
+                return true;
+            }
+        }
+        return neutralElement != null;
     }
 }

@@ -23,6 +23,10 @@
             <id>papermc</id>
             <url>https://repo.papermc.io/repository/maven-public/</url>
         </repository>
+        <repository>
+            <id>mgdev-repo</id>
+            <url>https://ci.mg-dev.eu/plugin/repository/everything/</url>
+        </repository>
     </repositories>
 
     <dependencies>
@@ -31,6 +35,22 @@
             <groupId>io.papermc.paper</groupId>
             <artifactId>paper-api</artifactId>
             <version>1.21.10-R0.1-SNAPSHOT</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- TrainCarts API -->
+        <dependency>
+            <groupId>com.bergerkiller.bukkit</groupId>
+            <artifactId>TrainCarts</artifactId>
+            <version>1.21.1-v1</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- BKCommonLib (required by TrainCarts) -->
+        <dependency>
+            <groupId>com.bergerkiller.bukkit</groupId>
+            <artifactId>BKCommonLib</artifactId>
+            <version>1.21.1-v1</version>
             <scope>provided</scope>
         </dependency>
     </dependencies>

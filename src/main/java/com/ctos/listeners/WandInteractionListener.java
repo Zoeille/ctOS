@@ -1,10 +1,7 @@
 package com.ctos.listeners;
 
 import com.ctos.CtOSPlugin;
-import com.ctos.trafficlight.model.BlockPosition;
-import com.ctos.trafficlight.model.BlockStateData;
-import com.ctos.trafficlight.model.Intersection;
-import com.ctos.trafficlight.model.TimingConfiguration;
+import com.ctos.trafficlight.model.*;
 import com.ctos.trafficlight.service.IntersectionManager;
 import com.ctos.trafficlight.service.IntersectionPersistence;
 import com.ctos.trafficlight.state.SetupSession;
@@ -16,12 +13,15 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.block.Block;
+import org.bukkit.entity.ItemFrame;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
+import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
 
 import java.io.IOException;
@@ -79,6 +79,97 @@ public class WandInteractionListener implements Listener {
     }
 
     /**
+     * Handles player interaction with entities (item frames)
+     */
+    @EventHandler
+    public void onPlayerInteractEntity(PlayerInteractEntityEvent event) {
+        // Only handle main hand interactions
+        if (event.getHand() != EquipmentSlot.HAND) {
+            return;
+        }
+
+        // Check if the entity is an item frame
+        if (!(event.getRightClicked() instanceof ItemFrame)) {
+            return;
+        }
+
+        Player player = event.getPlayer();
+        ItemStack item = player.getInventory().getItemInMainHand();
+
+        // Check if player is holding the wand
+        if (!WandState.isWand(item)) {
+            return;
+        }
+
+        Optional<SetupSession> sessionOpt = wandStateManager.getSession(player);
+        if (!sessionOpt.isPresent()) {
+            return;
+        }
+
+        SetupSession session = sessionOpt.get();
+        session.touch();
+
+        // Cancel the normal item frame interaction
+        event.setCancelled(true);
+
+        // Handle item frame selection
+        handleItemFrameSelection(player, session, (ItemFrame) event.getRightClicked());
+    }
+
+    /**
+     * Handles item frame selection
+     */
+    private void handleItemFrameSelection(Player player, SetupSession session, ItemFrame itemFrame) {
+        SetupStep step = session.getCurrentStep();
+
+        switch (step) {
+            case SELECT_NEUTRAL_BLOCK:
+                // Capture item frame as neutral element
+                ItemFrameElement neutralElement = ItemFrameElement.capture(itemFrame);
+                session.getIntersectionInProgress().setNeutralElement(neutralElement);
+                player.sendMessage(Component.text("[ctOS] Neutral element set to item frame with: " +
+                        (itemFrame.getItem().getType().isAir() ? "empty" : itemFrame.getItem().getType().name()))
+                        .color(NamedTextColor.GREEN));
+
+                // Check if we're in edit mode
+                if (session.getIntersectionInProgress().getSides().size() > 0) {
+                    session.setCurrentStep(SetupStep.EDIT_MENU);
+                    session.sendPrompt(player);
+                } else {
+                    String direction = SetupSession.detectDirection(player.getLocation().getYaw());
+                    player.sendMessage(Component.text("[ctOS] Detected direction: " + direction + " (based on where you're looking)")
+                            .color(NamedTextColor.AQUA));
+
+                    session.advanceToNextStep();
+                    session.startNewSide(direction);
+                    session.advanceToNextStep();
+                    session.sendPrompt(player);
+                }
+                break;
+
+            case SELECT_RED_BLOCKS:
+            case SELECT_ORANGE_BLOCKS:
+            case SELECT_GREEN_BLOCKS:
+            case SELECT_PEDESTRIAN_GREEN:
+            case SELECT_PEDESTRIAN_RED:
+                // Capture and add to buffer
+                ItemFrameElement element = ItemFrameElement.capture(itemFrame);
+                session.addElementToBuffer(element);
+
+                int count = session.getTotalBufferSize();
+                String itemName = itemFrame.getItem().getType().isAir() ? "empty frame" : itemFrame.getItem().getType().name();
+                player.sendMessage(Component.text("[ctOS] Item frame selected (" + itemName + ", " + count + " total). Left-click to confirm.")
+                        .color(NamedTextColor.YELLOW));
+                break;
+
+            default:
+                player.sendMessage(Component.text("[ctOS] Cannot select item frames at this step.")
+                        .color(NamedTextColor.RED));
+                break;
+        }
+    }
+
+    /**
      * Handles block selection (right-click)
      */
     private void handleBlockSelection(Player player, SetupSession session, Block block) {
@@ -99,12 +190,12 @@ public class WandInteractionListener implements Listener {
                 } else {
                     // Normal setup: Detect direction for first side
                     String direction = SetupSession.detectDirection(player.getLocation().getYaw());
-                    player.sendMessage(Component.text("[ctOS] Starting first side: " + direction + " (based on where you're looking)")
+                    player.sendMessage(Component.text("[ctOS] Detected direction: " + direction + " (based on where you're looking)")
                             .color(NamedTextColor.AQUA));
 
                     session.advanceToNextStep(); // Goes to START_SIDE
                     session.startNewSide(direction); // Creates first side with detected direction
-                    session.advanceToNextStep(); // Goes to SELECT_RED_BLOCKS
+                    session.advanceToNextStep(); // Goes to CONFIRM_DIRECTION
                     session.sendPrompt(player);
                 }
                 break;
@@ -114,13 +205,17 @@ public class WandInteractionListener implements Listener {
             case SELECT_GREEN_BLOCKS:
             case SELECT_PEDESTRIAN_GREEN:
             case SELECT_PEDESTRIAN_RED:
-                // Add to buffer
+                // Add to buffer (both legacy and element-based)
                 BlockPosition pos = BlockPosition.fromLocation(block.getLocation());
                 BlockStateData state = BlockStateData.capture(block);
                 session.addToBuffer(pos, state);
 
-                int count = session.getBufferSize();
-                player.sendMessage(Component.text("[ctOS] Block selected (" + count + " total). Left-click to confirm.")
+                // Also add as element
+                BlockElement blockElement = BlockElement.capture(block);
+                session.addElementToBuffer(blockElement);
+
+                int count = session.getTotalBufferSize();
+                player.sendMessage(Component.text("[ctOS] Block selected (" + block.getType().name() + ", " + count + " total). Left-click to confirm.")
                         .color(NamedTextColor.YELLOW));
                 break;
 
@@ -141,14 +236,14 @@ public class WandInteractionListener implements Listener {
             case SELECT_RED_BLOCKS:
             case SELECT_ORANGE_BLOCKS:
             case SELECT_GREEN_BLOCKS:
-                if (session.getBufferSize() == 0) {
-                    player.sendMessage(Component.text("[ctOS] No blocks selected! Right-click blocks first.")
+                if (session.getTotalBufferSize() == 0) {
+                    player.sendMessage(Component.text("[ctOS] No blocks or item frames selected! Right-click to select.")
                             .color(NamedTextColor.RED));
                     return;
                 }
 
                 session.confirmCurrentSelection();
-                player.sendMessage(Component.text("[ctOS] Blocks confirmed for " + step.name())
+                player.sendMessage(Component.text("[ctOS] Selection confirmed for " + step.name())
                         .color(NamedTextColor.GREEN));
                 session.advanceToNextStep();
                 session.sendPrompt(player);
@@ -156,15 +251,14 @@ public class WandInteractionListener implements Listener {
 
             case SELECT_PEDESTRIAN_GREEN:
                 // Pedestrian green lights are optional
-                // Check buffer size BEFORE confirming (which clears the buffer)
-                int greenBlockCount = session.getBufferSize();
+                int greenCount = session.getTotalBufferSize();
                 session.confirmCurrentSelection();
 
-                if (greenBlockCount == 0) {
+                if (greenCount == 0) {
                     player.sendMessage(Component.text("[ctOS] No pedestrian green lights added (skipped).")
                             .color(NamedTextColor.YELLOW));
                 } else {
-                    player.sendMessage(Component.text("[ctOS] Pedestrian green blocks confirmed! (" + greenBlockCount + " blocks)")
+                    player.sendMessage(Component.text("[ctOS] Pedestrian green confirmed! (" + greenCount + " elements)")
                             .color(NamedTextColor.GREEN));
                 }
                 session.advanceToNextStep();
@@ -173,15 +267,14 @@ public class WandInteractionListener implements Listener {
 
             case SELECT_PEDESTRIAN_RED:
                 // Pedestrian red lights are optional
-                // Check buffer size BEFORE confirming (which clears the buffer)
-                int redBlockCount = session.getBufferSize();
+                int redCount = session.getTotalBufferSize();
                 session.confirmCurrentSelection();
 
-                if (redBlockCount == 0) {
+                if (redCount == 0) {
                     player.sendMessage(Component.text("[ctOS] No pedestrian red lights added (skipped).")
                             .color(NamedTextColor.YELLOW));
                 } else {
-                    player.sendMessage(Component.text("[ctOS] Pedestrian red blocks confirmed! (" + redBlockCount + " blocks)")
+                    player.sendMessage(Component.text("[ctOS] Pedestrian red confirmed! (" + redCount + " elements)")
                             .color(NamedTextColor.GREEN));
                 }
                 session.advanceToNextStep();
@@ -207,16 +300,27 @@ public class WandInteractionListener implements Listener {
         SetupSession session = sessionOpt.get();
         SetupStep step = session.getCurrentStep();
 
-        // Only handle chat if the current step requires text input
+        // Extract text from the chat message
+        String input = PlainTextComponentSerializer.plainText().serialize(event.message());
+
+        // Always allow "cancel" command regardless of step
+        if (input.equalsIgnoreCase("cancel")) {
+            event.setCancelled(true);
+            session.touch();
+            player.sendMessage(Component.text("[ctOS] Setup cancelled.")
+                    .color(NamedTextColor.YELLOW));
+            wandStateManager.removeSession(player);
+            WandState.removeWandFromInventory(player);
+            return;
+        }
+
+        // Only handle other chat if the current step requires text input
         if (!step.requiresTextInput()) {
             return;
         }
 
         event.setCancelled(true);
         session.touch();
-
-        // Extract text from the chat message
-        String input = PlainTextComponentSerializer.plainText().serialize(event.message());
 
         handleChatInput(player, session, input);
     }
@@ -242,6 +346,10 @@ public class WandInteractionListener implements Listener {
 
             case CONFIRM_SIDE:
                 handleSideConfirmation(player, session, input);
+                break;
+
+            case CONFIRM_DIRECTION:
+                handleDirectionConfirmation(player, session, input);
                 break;
 
             case CONFIGURE_TIMING:
@@ -271,10 +379,10 @@ public class WandInteractionListener implements Listener {
             case "add":
                 // Start adding a new side
                 String direction = SetupSession.detectDirection(player.getLocation().getYaw());
-                player.sendMessage(Component.text("[ctOS] Adding new side: " + direction + " (based on where you're looking)")
+                player.sendMessage(Component.text("[ctOS] Detected direction: " + direction + " (based on where you're looking)")
                         .color(NamedTextColor.AQUA));
                 session.startNewSide(direction);
-                session.advanceToNextStep();
+                session.advanceToNextStep(); // Goes to CONFIRM_DIRECTION
                 session.sendPrompt(player);
                 break;
 
@@ -410,7 +518,7 @@ public class WandInteractionListener implements Listener {
      */
     private void handleSideConfirmation(Player player, SetupSession session, String input) {
         Intersection intersection = session.getIntersectionInProgress();
-        boolean isEditMode = intersection.getSides().size() > 0 && intersection.getNeutralState() != null;
+        boolean isEditMode = intersection.getSides().size() > 0 && (intersection.getNeutralState() != null || intersection.getNeutralElement() != null);
 
         if (input.equalsIgnoreCase("next")) {
             // Complete current side
@@ -425,7 +533,7 @@ public class WandInteractionListener implements Listener {
                     .color(NamedTextColor.AQUA));
 
             session.startNewSide(direction);
-            session.advanceToNextStep();
+            session.advanceToNextStep(); // Goes to CONFIRM_DIRECTION
             session.sendPrompt(player);
         } else if (input.equalsIgnoreCase("done")) {
             // Complete current side
@@ -460,12 +568,54 @@ public class WandInteractionListener implements Listener {
     }
 
     /**
+     * Handles direction confirmation/change
+     */
+    private void handleDirectionConfirmation(Player player, SetupSession session, String input) {
+        String loweredInput = input.trim().toLowerCase();
+
+        if (loweredInput.equals("ok") || loweredInput.equals("yes") || loweredInput.equals("oui")) {
+            // Keep current direction, proceed to block selection
+            player.sendMessage(Component.text("[ctOS] Direction confirmed: " + session.getCurrentSideInProgress().getDirection())
+                    .color(NamedTextColor.GREEN));
+            session.advanceToNextStep();
+            session.sendPrompt(player);
+        } else if (loweredInput.equals("north") || loweredInput.equals("nord")) {
+            session.getCurrentSideInProgress().setDirection("North");
+            player.sendMessage(Component.text("[ctOS] Direction changed to: North")
+                    .color(NamedTextColor.GREEN));
+            session.advanceToNextStep();
+            session.sendPrompt(player);
+        } else if (loweredInput.equals("south") || loweredInput.equals("sud")) {
+            session.getCurrentSideInProgress().setDirection("South");
+            player.sendMessage(Component.text("[ctOS] Direction changed to: South")
+                    .color(NamedTextColor.GREEN));
+            session.advanceToNextStep();
+            session.sendPrompt(player);
+        } else if (loweredInput.equals("east") || loweredInput.equals("est")) {
+            session.getCurrentSideInProgress().setDirection("East");
+            player.sendMessage(Component.text("[ctOS] Direction changed to: East")
+                    .color(NamedTextColor.GREEN));
+            session.advanceToNextStep();
+            session.sendPrompt(player);
+        } else if (loweredInput.equals("west") || loweredInput.equals("ouest")) {
+            session.getCurrentSideInProgress().setDirection("West");
+            player.sendMessage(Component.text("[ctOS] Direction changed to: West")
+                    .color(NamedTextColor.GREEN));
+            session.advanceToNextStep();
+            session.sendPrompt(player);
+        } else {
+            player.sendMessage(Component.text("[ctOS] Invalid input. Type 'ok' to confirm, or 'north', 'south', 'east', 'west' to change direction.")
+                    .color(NamedTextColor.RED));
+        }
+    }
+
+    /**
      * Handles timing configuration input
      * Format: "green,orange,pedestrian,gap" in seconds
      */
     private void handleTimingInput(Player player, SetupSession session, String input) {
         Intersection intersection = session.getIntersectionInProgress();
-        boolean isEditMode = intersection.getSides().size() >= 2 && intersection.getNeutralState() != null;
+        boolean isEditMode = intersection.getSides().size() >= 2 && (intersection.getNeutralState() != null || intersection.getNeutralElement() != null);
 
         try {
             String[] parts = input.split(",");

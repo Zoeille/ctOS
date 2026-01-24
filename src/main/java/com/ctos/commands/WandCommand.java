@@ -2,6 +2,8 @@ package com.ctos.commands;
 
 import com.ctos.CtOSPlugin;
 import com.ctos.trafficlight.model.Intersection;
+import com.ctos.trafficlight.model.ItemFrameElement;
+import com.ctos.trafficlight.model.TrafficLightElement;
 import com.ctos.trafficlight.service.IntersectionManager;
 import com.ctos.trafficlight.service.IntersectionPersistence;
 import com.ctos.trafficlight.state.SetupSession;
@@ -55,6 +57,20 @@ public class WandCommand {
     public LiteralCommandNode<CommandSourceStack> buildCommand() {
         return Commands.literal("ctos")
                 .requires(requirement -> requirement.getSender().hasPermission("ctos.use"))
+                .then(buildTrafficLightSubcommand("tl"))
+                .then(buildTrafficLightSubcommand("trafficlights"))
+                .executes(context -> {
+                    sendMainHelp(context.getSource().getSender());
+                    return Command.SINGLE_SUCCESS;
+                })
+                .build();
+    }
+
+    /**
+     * Builds the traffic light subcommand tree
+     */
+    private com.mojang.brigadier.builder.LiteralArgumentBuilder<CommandSourceStack> buildTrafficLightSubcommand(String name) {
+        return Commands.literal(name)
                 .then(Commands.literal("wand")
                         .executes(context -> {
                             handleWand(context.getSource().getSender());
@@ -76,6 +92,10 @@ public class WandCommand {
                                     return Command.SINGLE_SUCCESS;
                                 })
                         )
+                        .executes(context -> {
+                            handleInfo(context.getSource().getSender(), new String[]{"info"});
+                            return Command.SINGLE_SUCCESS;
+                        })
                 )
                 .then(Commands.literal("remove")
                         .then(Commands.argument("identifier", StringArgumentType.string())
@@ -96,6 +116,10 @@ public class WandCommand {
                                     return Command.SINGLE_SUCCESS;
                                 })
                         )
+                        .executes(context -> {
+                            handleEdit(context.getSource().getSender(), new String[]{"edit"});
+                            return Command.SINGLE_SUCCESS;
+                        })
                 )
                 .then(Commands.literal("cancel")
                         .executes(context -> {
@@ -112,8 +136,7 @@ public class WandCommand {
                 .executes(context -> {
                     sendHelp(context.getSource().getSender());
                     return Command.SINGLE_SUCCESS;
-                })
-                .build();
+                });
     }
 
     /**
@@ -170,21 +193,21 @@ public class WandCommand {
             Component infoButton = Component.text("[Info]")
                     .color(NamedTextColor.AQUA)
                     .decorate(TextDecoration.BOLD)
-                    .clickEvent(ClickEvent.runCommand("/ctos info " + id))
+                    .clickEvent(ClickEvent.runCommand("/ctos tl info " + id))
                     .hoverEvent(HoverEvent.showText(Component.text("Click to view details")));
 
             // Edit button
             Component editButton = Component.text("[Edit]")
                     .color(NamedTextColor.GREEN)
                     .decorate(TextDecoration.BOLD)
-                    .clickEvent(ClickEvent.runCommand("/ctos edit " + id))
+                    .clickEvent(ClickEvent.runCommand("/ctos tl edit " + id))
                     .hoverEvent(HoverEvent.showText(Component.text("Click to edit this intersection")));
 
             // Remove button
             Component removeButton = Component.text("[Remove]")
                     .color(NamedTextColor.RED)
                     .decorate(TextDecoration.BOLD)
-                    .clickEvent(ClickEvent.suggestCommand("/ctos remove " + id))
+                    .clickEvent(ClickEvent.suggestCommand("/ctos tl remove " + id))
                     .hoverEvent(HoverEvent.showText(Component.text("Click to remove this intersection")));
 
             Component message = Component.text("- ")
@@ -212,7 +235,7 @@ public class WandCommand {
         }
 
         if (args.length < 2) {
-            sender.sendMessage(Component.text("Usage: /ctos remove <id|name>").color(NamedTextColor.RED));
+            sender.sendMessage(Component.text("Usage: /ctos tl remove <id|name>").color(NamedTextColor.RED));
             return;
         }
 
@@ -222,6 +245,10 @@ public class WandCommand {
         try {
             UUID id = UUID.fromString(identifier);
             if (intersectionManager.hasIntersection(id)) {
+                Intersection intersection = intersectionManager.getIntersection(id).orElse(null);
+                if (intersection != null) {
+                    plugin.getAnimator().unregisterIntersection(intersection);
+                }
                 intersectionManager.removeIntersection(id);
                 this.intersectionPersistence.deleteIntersection(id);
                 sender.sendMessage(Component.text("Removed intersection").color(NamedTextColor.GREEN));
@@ -245,6 +272,7 @@ public class WandCommand {
             }
 
             Intersection intersection = matches.getFirst();
+            plugin.getAnimator().unregisterIntersection(intersection);
             intersectionManager.removeIntersection(intersection.getId());
             this.intersectionPersistence.deleteIntersection(intersection.getId());
             sender.sendMessage(Component.text("Removed intersection: " + intersection.getName()).color(NamedTextColor.GREEN));
@@ -270,7 +298,7 @@ public class WandCommand {
         if (args.length < 2) {
             // No argument - try to find nearest intersection if player
             if (!(sender instanceof Player)) {
-                sender.sendMessage(Component.text("Usage: /ctos info <id|name>").color(NamedTextColor.RED));
+                sender.sendMessage(Component.text("Usage: /ctos tl info <id|name>").color(NamedTextColor.RED));
                 return;
             }
 
@@ -278,7 +306,7 @@ public class WandCommand {
             intersection = findNearestIntersection(player, 50); // 50 blocks max distance
 
             if (intersection == null) {
-                sender.sendMessage(Component.text("No intersection found nearby. Usage: /ctos info <id|name>").color(NamedTextColor.RED));
+                sender.sendMessage(Component.text("No intersection found nearby. Usage: /ctos tl info <id|name>").color(NamedTextColor.RED));
                 return;
             }
 
@@ -378,10 +406,23 @@ public class WandCommand {
 
         // Display neutral state
         if (intersection.getNeutralState() != null) {
-            sender.sendMessage(Component.text("Neutral block: ").color(NamedTextColor.GRAY)
-                    .append(Component.text(intersection.getNeutralState().getMaterial().toString()).color(NamedTextColor.WHITE)));
+            sender.sendMessage(Component.text("Neutral: ").color(NamedTextColor.GRAY)
+                    .append(Component.text("Block - " + intersection.getNeutralState().getMaterial().toString()).color(NamedTextColor.WHITE)));
+        } else if (intersection.getNeutralElement() != null) {
+            TrafficLightElement neutralElement = intersection.getNeutralElement();
+            String elementInfo = neutralElement.getElementType();
+            if (neutralElement instanceof ItemFrameElement ife && ife.getFrameState() != null) {
+                var serializedItem = ife.getFrameState().getSerializedItem();
+                if (serializedItem != null && serializedItem.containsKey("type")) {
+                    elementInfo = "Item Frame - " + serializedItem.get("type");
+                } else {
+                    elementInfo = "Item Frame - Empty";
+                }
+            }
+            sender.sendMessage(Component.text("Neutral: ").color(NamedTextColor.GRAY)
+                    .append(Component.text(elementInfo).color(NamedTextColor.WHITE)));
         } else {
-            sender.sendMessage(Component.text("Neutral block: ").color(NamedTextColor.GRAY)
+            sender.sendMessage(Component.text("Neutral: ").color(NamedTextColor.GRAY)
                     .append(Component.text("Not set").color(NamedTextColor.RED)));
         }
 
@@ -421,7 +462,7 @@ public class WandCommand {
             intersection = findNearestIntersection(player, 50);
 
             if (intersection == null) {
-                sender.sendMessage(Component.text("No intersection found nearby. Usage: /ctos edit <id|name>").color(NamedTextColor.RED));
+                sender.sendMessage(Component.text("No intersection found nearby. Usage: /ctos tl edit <id|name>").color(NamedTextColor.RED));
                 return;
             }
         } else {
@@ -540,23 +581,34 @@ public class WandCommand {
     }
 
     /**
-     * Sends help message
+     * Sends main ctOS help message
+     */
+    private void sendMainHelp(CommandSender sender) {
+        sender.sendMessage(Component.text("=== ctOS ===").color(NamedTextColor.GOLD));
+        sender.sendMessage(Component.text("/ctos tl").color(NamedTextColor.YELLOW)
+                .append(Component.text(" - Traffic lights module").color(NamedTextColor.GRAY)));
+        sender.sendMessage(Component.text("/ctos trafficlights").color(NamedTextColor.YELLOW)
+                .append(Component.text(" - Traffic lights module (alias)").color(NamedTextColor.GRAY)));
+    }
+
+    /**
+     * Sends traffic light help message
      */
     private void sendHelp(CommandSender sender) {
         sender.sendMessage(Component.text("=== ctOS Traffic Lights ===").color(NamedTextColor.GOLD));
-        sender.sendMessage(Component.text("/ctos wand").color(NamedTextColor.YELLOW)
+        sender.sendMessage(Component.text("/ctos tl wand").color(NamedTextColor.YELLOW)
                 .append(Component.text(" - Get the setup wand").color(NamedTextColor.GRAY)));
-        sender.sendMessage(Component.text("/ctos list").color(NamedTextColor.YELLOW)
+        sender.sendMessage(Component.text("/ctos tl list").color(NamedTextColor.YELLOW)
                 .append(Component.text(" - List all intersections").color(NamedTextColor.GRAY)));
-        sender.sendMessage(Component.text("/ctos remove <id>").color(NamedTextColor.YELLOW)
+        sender.sendMessage(Component.text("/ctos tl remove <id>").color(NamedTextColor.YELLOW)
                 .append(Component.text(" - Remove an intersection").color(NamedTextColor.GRAY)));
-        sender.sendMessage(Component.text("/ctos info [id]").color(NamedTextColor.YELLOW)
+        sender.sendMessage(Component.text("/ctos tl info [id]").color(NamedTextColor.YELLOW)
                 .append(Component.text(" - Show intersection info (auto-detect if nearby)").color(NamedTextColor.GRAY)));
-        sender.sendMessage(Component.text("/ctos edit [id]").color(NamedTextColor.YELLOW)
+        sender.sendMessage(Component.text("/ctos tl edit [id]").color(NamedTextColor.YELLOW)
                 .append(Component.text(" - Edit an intersection (auto-detect if nearby)").color(NamedTextColor.GRAY)));
-        sender.sendMessage(Component.text("/ctos cancel").color(NamedTextColor.YELLOW)
+        sender.sendMessage(Component.text("/ctos tl cancel").color(NamedTextColor.YELLOW)
                 .append(Component.text(" - Cancel current setup").color(NamedTextColor.GRAY)));
-        sender.sendMessage(Component.text("/ctos reload").color(NamedTextColor.YELLOW)
+        sender.sendMessage(Component.text("/ctos tl reload").color(NamedTextColor.YELLOW)
                 .append(Component.text(" - Reload configuration").color(NamedTextColor.GRAY)));
     }
 

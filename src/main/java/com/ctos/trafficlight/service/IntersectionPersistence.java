@@ -4,6 +4,8 @@ import com.ctos.trafficlight.model.*;
 import com.google.gson.*;
 import com.google.gson.reflect.TypeToken;
 import org.bukkit.Material;
+import org.bukkit.Rotation;
+import org.bukkit.block.BlockFace;
 
 import java.io.*;
 import java.lang.reflect.Type;
@@ -31,7 +33,12 @@ public class IntersectionPersistence {
                 .registerTypeAdapter(BlockPosition.class, new BlockPositionAdapter())
                 .registerTypeAdapter(BlockStateData.class, new BlockStateDataAdapter())
                 .registerTypeAdapter(Material.class, new MaterialAdapter())
-                .registerTypeAdapter(UUID.class, new UUIDAdapter());
+                .registerTypeAdapter(UUID.class, new UUIDAdapter())
+                .registerTypeAdapter(ElementPosition.class, new ElementPositionAdapter())
+                .registerTypeAdapter(TrafficLightElement.class, new TrafficLightElementAdapter())
+                .registerTypeAdapter(ItemFrameStateData.class, new ItemFrameStateDataAdapter())
+                .registerTypeAdapter(BlockFace.class, new BlockFaceAdapter())
+                .registerTypeAdapter(Rotation.class, new RotationAdapter());
 
         this.gson = gsonBuilder.create();
 
@@ -215,6 +222,164 @@ public class IntersectionPersistence {
         @Override
         public UUID deserialize(JsonElement json, Type typeOfT, JsonDeserializationContext context) throws JsonParseException {
             return UUID.fromString(json.getAsString());
+        }
+    }
+
+    /**
+     * Type adapter for ElementPosition
+     */
+    private static class ElementPositionAdapter implements JsonSerializer<ElementPosition>, JsonDeserializer<ElementPosition> {
+        @Override
+        public JsonElement serialize(ElementPosition src, Type typeOfSrc, JsonSerializationContext context) {
+            JsonObject obj = new JsonObject();
+            obj.addProperty("world", src.getWorldName());
+            obj.addProperty("x", src.getX());
+            obj.addProperty("y", src.getY());
+            obj.addProperty("z", src.getZ());
+            if (src.getFacing() != null) {
+                obj.addProperty("facing", src.getFacing().name());
+            }
+            return obj;
+        }
+
+        @Override
+        public ElementPosition deserialize(JsonElement json, Type typeOfT, JsonDeserializationContext context) throws JsonParseException {
+            // Handle string format (used as Map keys)
+            if (json.isJsonPrimitive() && json.getAsJsonPrimitive().isString()) {
+                return ElementPosition.fromString(json.getAsString());
+            }
+
+            JsonObject obj = json.getAsJsonObject();
+            String world = obj.get("world").getAsString();
+            int x = obj.get("x").getAsInt();
+            int y = obj.get("y").getAsInt();
+            int z = obj.get("z").getAsInt();
+            BlockFace facing = null;
+            if (obj.has("facing") && !obj.get("facing").isJsonNull()) {
+                facing = BlockFace.valueOf(obj.get("facing").getAsString());
+            }
+            return new ElementPosition(world, x, y, z, facing);
+        }
+    }
+
+    /**
+     * Type adapter for TrafficLightElement (polymorphic serialization)
+     */
+    private class TrafficLightElementAdapter implements JsonSerializer<TrafficLightElement>, JsonDeserializer<TrafficLightElement> {
+        @Override
+        public JsonElement serialize(TrafficLightElement src, Type typeOfSrc, JsonSerializationContext context) {
+            JsonObject obj = new JsonObject();
+            obj.addProperty("type", src.getElementType());
+            obj.add("position", context.serialize(src.getPosition(), ElementPosition.class));
+
+            if (src instanceof BlockElement) {
+                BlockElement block = (BlockElement) src;
+                obj.add("blockState", context.serialize(block.getBlockStateData(), BlockStateData.class));
+            } else if (src instanceof ItemFrameElement) {
+                ItemFrameElement frame = (ItemFrameElement) src;
+                obj.add("frameState", context.serialize(frame.getFrameState(), ItemFrameStateData.class));
+            }
+
+            return obj;
+        }
+
+        @Override
+        public TrafficLightElement deserialize(JsonElement json, Type typeOfT, JsonDeserializationContext context) throws JsonParseException {
+            JsonObject obj = json.getAsJsonObject();
+            String type = obj.get("type").getAsString();
+            ElementPosition position = context.deserialize(obj.get("position"), ElementPosition.class);
+
+            if ("block".equals(type)) {
+                BlockStateData blockState = context.deserialize(obj.get("blockState"), BlockStateData.class);
+                return new BlockElement(position, blockState);
+            } else if ("item_frame".equals(type)) {
+                ItemFrameStateData frameState = context.deserialize(obj.get("frameState"), ItemFrameStateData.class);
+                return new ItemFrameElement(position, frameState);
+            }
+
+            throw new JsonParseException("Unknown TrafficLightElement type: " + type);
+        }
+    }
+
+    /**
+     * Type adapter for ItemFrameStateData
+     */
+    private static class ItemFrameStateDataAdapter implements JsonSerializer<ItemFrameStateData>, JsonDeserializer<ItemFrameStateData> {
+        @Override
+        public JsonElement serialize(ItemFrameStateData src, Type typeOfSrc, JsonSerializationContext context) {
+            JsonObject obj = new JsonObject();
+
+            if (src.getSerializedItem() != null) {
+                obj.add("item", context.serialize(src.getSerializedItem()));
+            }
+            if (src.getRotation() != null) {
+                obj.addProperty("rotation", src.getRotation().name());
+            }
+            if (src.getFacing() != null) {
+                obj.addProperty("facing", src.getFacing().name());
+            }
+            obj.addProperty("visible", src.isVisible());
+            obj.addProperty("glowing", src.isGlowing());
+            obj.addProperty("fixed", src.isFixed());
+
+            return obj;
+        }
+
+        @Override
+        public ItemFrameStateData deserialize(JsonElement json, Type typeOfT, JsonDeserializationContext context) throws JsonParseException {
+            JsonObject obj = json.getAsJsonObject();
+
+            Map<String, Object> serializedItem = null;
+            if (obj.has("item") && !obj.get("item").isJsonNull()) {
+                Type mapType = new TypeToken<Map<String, Object>>(){}.getType();
+                serializedItem = context.deserialize(obj.get("item"), mapType);
+            }
+
+            Rotation rotation = null;
+            if (obj.has("rotation") && !obj.get("rotation").isJsonNull()) {
+                rotation = Rotation.valueOf(obj.get("rotation").getAsString());
+            }
+
+            BlockFace facing = null;
+            if (obj.has("facing") && !obj.get("facing").isJsonNull()) {
+                facing = BlockFace.valueOf(obj.get("facing").getAsString());
+            }
+
+            boolean visible = obj.has("visible") && obj.get("visible").getAsBoolean();
+            boolean glowing = obj.has("glowing") && obj.get("glowing").getAsBoolean();
+            boolean fixed = obj.has("fixed") && obj.get("fixed").getAsBoolean();
+
+            return new ItemFrameStateData(serializedItem, rotation, facing, visible, glowing, fixed);
+        }
+    }
+
+    /**
+     * Type adapter for BlockFace enum
+     */
+    private static class BlockFaceAdapter implements JsonSerializer<BlockFace>, JsonDeserializer<BlockFace> {
+        @Override
+        public JsonElement serialize(BlockFace src, Type typeOfSrc, JsonSerializationContext context) {
+            return new JsonPrimitive(src.name());
+        }
+
+        @Override
+        public BlockFace deserialize(JsonElement json, Type typeOfT, JsonDeserializationContext context) throws JsonParseException {
+            return BlockFace.valueOf(json.getAsString());
+        }
+    }
+
+    /**
+     * Type adapter for Rotation enum
+     */
+    private static class RotationAdapter implements JsonSerializer<Rotation>, JsonDeserializer<Rotation> {
+        @Override
+        public JsonElement serialize(Rotation src, Type typeOfSrc, JsonSerializationContext context) {
+            return new JsonPrimitive(src.name());
+        }
+
+        @Override
+        public Rotation deserialize(JsonElement json, Type typeOfT, JsonDeserializationContext context) throws JsonParseException {
+            return Rotation.valueOf(json.getAsString());
         }
     }
 }

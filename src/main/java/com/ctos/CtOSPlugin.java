@@ -9,6 +9,7 @@ import com.ctos.trafficlight.service.IntersectionPersistence;
 import com.ctos.trafficlight.service.TrafficLightAnimator;
 import com.ctos.trafficlight.state.WandState;
 import com.ctos.trafficlight.state.WandStateManager;
+import com.ctos.traincarts.SignActionBartStation;
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -32,6 +33,10 @@ public class CtOSPlugin extends JavaPlugin {
 
     // Auto-save task
     private BukkitRunnable autoSaveTask;
+
+    // TrainCarts integration
+    private SignActionBartStation signActionBartStation;
+    private boolean trainCartsEnabled = false;
 
     @Override
     public void onEnable() {
@@ -85,10 +90,14 @@ public class CtOSPlugin extends JavaPlugin {
         // 9. Start auto-save task
         startAutoSaveTask();
 
+        // 10. Register TrainCarts integration if available
+        registerTrainCartsIntegration();
+
         getLogger().info("==============================================");
         getLogger().info("  ctOS Traffic Lights Plugin Enabled!");
         getLogger().info("  Loaded " + intersectionManager.getIntersectionCount() + " intersections");
         getLogger().info("  Active animations: " + animator.getActiveCycleCount());
+        getLogger().info("  TrainCarts integration: " + (trainCartsEnabled ? "enabled" : "disabled"));
         getLogger().info("==============================================");
     }
 
@@ -103,6 +112,9 @@ public class CtOSPlugin extends JavaPlugin {
             autoSaveTask.cancel();
             autoSaveTask = null;
         }
+
+        // 1.5 Unregister TrainCarts integration
+        unregisterTrainCartsIntegration();
 
         // 2. Stop the animator
         if (animator != null) {
@@ -190,6 +202,41 @@ public class CtOSPlugin extends JavaPlugin {
 
         autoSaveTask.runTaskTimerAsynchronously(this, interval, interval);
         getLogger().info("Auto-save task started (interval: " + interval + " ticks)");
+    }
+
+    /**
+     * Registers TrainCarts sign actions if TrainCarts plugin is available
+     */
+    private void registerTrainCartsIntegration() {
+        if (Bukkit.getPluginManager().getPlugin("Train_Carts") != null) {
+            try {
+                signActionBartStation = new SignActionBartStation();
+                com.bergerkiller.bukkit.tc.signactions.SignAction.register(signActionBartStation);
+                trainCartsEnabled = true;
+                getLogger().info("TrainCarts integration enabled - registered sf-bart-station sign");
+            } catch (Exception e) {
+                getLogger().log(Level.WARNING, "Failed to register TrainCarts sign action", e);
+                trainCartsEnabled = false;
+            }
+        } else {
+            getLogger().info("TrainCarts not found - skipping integration");
+        }
+    }
+
+    /**
+     * Unregisters TrainCarts sign actions
+     */
+    private void unregisterTrainCartsIntegration() {
+        if (trainCartsEnabled && signActionBartStation != null) {
+            try {
+                com.bergerkiller.bukkit.tc.signactions.SignAction.unregister(signActionBartStation);
+                getLogger().info("TrainCarts integration disabled");
+            } catch (Exception e) {
+                getLogger().log(Level.WARNING, "Failed to unregister TrainCarts sign action", e);
+            }
+        }
+        signActionBartStation = null;
+        trainCartsEnabled = false;
     }
 
     // Getters for other classes to access managers

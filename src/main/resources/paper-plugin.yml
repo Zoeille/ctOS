@@ -5,6 +5,12 @@ api-version: '1.21'
 author: Zoeille
 description: Dynamic synchronized traffic lights for Minecraft
 
+dependencies:
+  server:
+    Train_Carts:
+      load: AFTER
+      required: false
+
 permissions:
   ctos.use:
     description: Allows using ctOS commands

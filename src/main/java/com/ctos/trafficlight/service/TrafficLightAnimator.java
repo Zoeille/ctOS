@@ -5,8 +5,11 @@ import com.ctos.trafficlight.cycle.CyclePhase;
 import com.ctos.trafficlight.cycle.TrafficCycle;
 import com.ctos.trafficlight.model.*;
 import org.bukkit.Bukkit;
+import org.bukkit.Chunk;
 import org.bukkit.Location;
+import org.bukkit.World;
 import org.bukkit.block.Block;
+import org.bukkit.entity.ItemFrame;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.scheduler.BukkitTask;
 
@@ -27,6 +30,7 @@ public class TrafficLightAnimator {
     private final IntersectionManager intersectionManager;
     private final Map<Intersection, TrafficCycle> cycles;
     private final Map<BlockPosition, LightPhase> currentBlockStates;
+    private final Map<ElementPosition, LightPhase> currentElementStates; // For element-based tracking
     private BukkitTask animationTask;
     private int tickInterval;
 
@@ -35,6 +39,7 @@ public class TrafficLightAnimator {
         this.intersectionManager = intersectionManager;
         this.cycles = new HashMap<>();
         this.currentBlockStates = new HashMap<>();
+        this.currentElementStates = new HashMap<>();
         this.tickInterval = plugin.getConfig().getInt("animation.tick-interval", 10);
     }
 
@@ -76,6 +81,7 @@ public class TrafficLightAnimator {
 
         cycles.clear();
         currentBlockStates.clear();
+        currentElementStates.clear();
 
         LOGGER.info("Traffic light animator stopped");
     }
@@ -99,6 +105,11 @@ public class TrafficLightAnimator {
         // Clear block states for this intersection
         for (BlockPosition pos : intersection.getAllBlocks()) {
             currentBlockStates.remove(pos);
+        }
+
+        // Clear element states for this intersection
+        for (ElementPosition pos : intersection.getAllElementPositions()) {
+            currentElementStates.remove(pos);
         }
 
         LOGGER.info("Unregistered intersection from animation: " + intersection.getName());
@@ -136,21 +147,22 @@ public class TrafficLightAnimator {
     private void updateIntersection(Intersection intersection, TrafficCycle cycle) {
         CyclePhase currentPhase = cycle.getCurrentPhase();
         BlockStateData neutralState = intersection.getNeutralState();
+        TrafficLightElement neutralElement = intersection.getNeutralElement();
         List<TrafficLightSide> sides = intersection.getSides();
 
         debug("=== Updating Intersection: " + intersection.getName() + " ===");
         debug("Current Phase: " + currentPhase);
         debug("Number of sides: " + sides.size());
 
-        if (neutralState == null) {
-            LOGGER.severe("ERROR: Neutral state is NULL for intersection " + intersection.getName());
+        if (neutralState == null && neutralElement == null) {
+            LOGGER.severe("ERROR: No neutral state defined for intersection " + intersection.getName());
         }
 
         // Update each side
         for (int i = 0; i < sides.size(); i++) {
             TrafficLightSide side = sides.get(i);
 
-            // NEW: Determine phase based on actual direction, not index
+            // Determine phase based on actual direction, not index
             LightPhase lightPhase;
             boolean pedestrianGreen;
 
@@ -172,14 +184,26 @@ public class TrafficLightAnimator {
                 LOGGER.warning("  -> Unknown direction, falling back to index-based: " + lightPhase);
             }
 
+            // Update element-based lights (if present)
+            if (side.hasElements()) {
+                debug("  - RED elements: " + side.getLightElements(LightPhase.RED).size());
+                debug("  - ORANGE elements: " + side.getLightElements(LightPhase.ORANGE).size());
+                debug("  - GREEN elements: " + side.getLightElements(LightPhase.GREEN).size());
+
+                updateSideElements(side, lightPhase, neutralElement, neutralState);
+
+                if (side.hasPedestrianElements()) {
+                    updatePedestrianElements(side, pedestrianGreen, neutralElement, neutralState);
+                }
+            }
+
+            // Update legacy block-based lights
             debug("  - RED blocks: " + side.getLightBlocks(LightPhase.RED).size());
             debug("  - ORANGE blocks: " + side.getLightBlocks(LightPhase.ORANGE).size());
             debug("  - GREEN blocks: " + side.getLightBlocks(LightPhase.GREEN).size());
 
-            // Update road lights
             updateSideLights(side, lightPhase, neutralState);
 
-            // Update pedestrian lights (if present)
             if (side.hasPedestrianLights()) {
                 updatePedestrianLights(side, pedestrianGreen, neutralState);
             }
@@ -273,6 +297,155 @@ public class TrafficLightAnimator {
     }
 
     /**
+     * Updates element-based lights for one side of an intersection
+     */
+    private void updateSideElements(TrafficLightSide side, LightPhase activePhase,
+                                     TrafficLightElement neutralElement, BlockStateData neutralState) {
+        debug("Updating side " + side.getDirection() + " elements to phase " + activePhase);
+        int elementsUpdated = 0;
+
+        // For each possible phase, update elements
+        for (LightPhase phase : LightPhase.values()) {
+            List<TrafficLightElement> elements = side.getLightElements(phase);
+
+            for (TrafficLightElement element : elements) {
+                ElementPosition pos = element.getPosition();
+
+                // Determine what to display
+                TrafficLightElement targetElement;
+                if (phase == activePhase) {
+                    targetElement = element;
+                } else {
+                    targetElement = neutralElement;
+                }
+
+                // Only update if the element state has changed
+                LightPhase currentState = currentElementStates.get(pos);
+                LightPhase newState = (phase == activePhase) ? phase : null;
+                boolean isFirstUpdate = !currentElementStates.containsKey(pos);
+
+                if (isFirstUpdate || currentState != newState) {
+                    debug("  Setting element at " + pos + " (phase: " + phase + ", active: " + (phase == activePhase) + ")");
+                    applyElementState(element, targetElement, side.getDirection(), neutralState);
+                    currentElementStates.put(pos, newState);
+                    elementsUpdated++;
+                }
+            }
+        }
+
+        debug("  Total elements updated for " + side.getDirection() + ": " + elementsUpdated);
+    }
+
+    /**
+     * Updates pedestrian elements for a side
+     */
+    private void updatePedestrianElements(TrafficLightSide side, boolean isGreen,
+                                           TrafficLightElement neutralElement, BlockStateData neutralState) {
+        List<TrafficLightElement> greenElements = side.getPedestrianGreenElements();
+        List<TrafficLightElement> redElements = side.getPedestrianRedElements();
+
+        if (isGreen) {
+            // Show pedestrian green elements
+            for (TrafficLightElement element : greenElements) {
+                applyElementState(element, element, null, neutralState);
+            }
+
+            // Show neutral state on red elements
+            for (TrafficLightElement element : redElements) {
+                applyElementState(element, neutralElement, null, neutralState);
+            }
+        } else {
+            // Show neutral state on green elements
+            for (TrafficLightElement element : greenElements) {
+                applyElementState(element, neutralElement, null, neutralState);
+            }
+
+            // Show pedestrian red elements
+            for (TrafficLightElement element : redElements) {
+                applyElementState(element, element, null, neutralState);
+            }
+        }
+    }
+
+    /**
+     * Applies an element state to the world
+     * @param targetPosition The element whose position to use
+     * @param stateToApply The element state to apply (or null for neutral)
+     * @param direction Cardinal direction for rotation
+     * @param neutralState Fallback neutral state for blocks
+     */
+    private void applyElementState(TrafficLightElement targetPosition, TrafficLightElement stateToApply,
+                                    String direction, BlockStateData neutralState) {
+        if (targetPosition == null) return;
+
+        ElementPosition pos = targetPosition.getPosition();
+        Location location;
+        try {
+            location = pos.toLocation();
+        } catch (Exception e) {
+            LOGGER.log(Level.WARNING, "Failed to get location for element at " + pos, e);
+            return;
+        }
+
+        // Check if chunk is loaded
+        if (!location.isChunkLoaded()) {
+            return;
+        }
+
+        Chunk chunk = location.getChunk();
+        if (!chunk.isEntitiesLoaded()) {
+            return;
+        }
+
+        World world = location.getWorld();
+
+        // Handle ItemFrameElements specially
+        if (targetPosition instanceof ItemFrameElement) {
+            ItemFrameElement frameElement = (ItemFrameElement) targetPosition;
+            ItemFrame itemFrame = frameElement.findOrSpawnItemFrame(world);
+
+            if (itemFrame == null) {
+                LOGGER.warning("Could not find or spawn item frame at " + frameElement.getPosition());
+                return;
+            }
+
+            if (stateToApply instanceof ItemFrameElement) {
+                // Apply another item frame's state to this frame
+                ItemFrameElement stateSource = (ItemFrameElement) stateToApply;
+                if (stateSource.getFrameState() != null) {
+                    stateSource.getFrameState().applyToItemFrame(itemFrame, false);
+                    debug("Applied item frame state from " + stateSource.getPosition() + " to " + frameElement.getPosition());
+                }
+            } else {
+                // No item frame neutral state - set to empty
+                // Temporarily set fixed=true to prevent item drops
+                boolean wasFixed = itemFrame.isFixed();
+                itemFrame.setFixed(true);
+                itemFrame.setItem(null, false);
+                itemFrame.setFixed(wasFixed);
+                debug("Set item frame to empty at " + frameElement.getPosition());
+            }
+            return;
+        }
+
+        // Handle BlockElements
+        if (stateToApply != null) {
+            // Apply the target state
+            if (direction != null) {
+                stateToApply.apply(world, direction);
+            } else {
+                stateToApply.applyWithFacingFrom(world, targetPosition);
+            }
+        } else if (targetPosition instanceof BlockElement) {
+            // Fallback to legacy neutral state for blocks
+            if (neutralState != null) {
+                Block block = location.getBlock();
+                neutralState.applyToBlockWithFacingFrom(block, ((BlockElement) targetPosition).getBlockStateData());
+            }
+        }
+    }
+
+    /**
      * Applies a block state copying the facing from another block state
      * Used for neutral blocks that need to match the orientation of what they replace
      */
@@ -283,6 +456,17 @@ public class TrafficLightAnimator {
         }
         try {
             Location location = position.toLocation();
+
+            // Check if chunk is loaded with active entities
+            if (!location.isChunkLoaded()) {
+                return; // Chunk not loaded, skip
+            }
+
+            Chunk chunk = location.getChunk();
+            if (!chunk.isEntitiesLoaded()) {
+                return; // Entities not loaded, skip
+            }
+
             Block block = location.getBlock();
             state.applyToBlockWithFacingFrom(block, facingSource);
         } catch (Exception e) {
@@ -304,11 +488,19 @@ public class TrafficLightAnimator {
         }
         try {
             Location location = position.toLocation();
+
+            // Check if chunk is loaded with active entities
+            if (!location.isChunkLoaded()) {
+                return; // Chunk not loaded, skip
+            }
+
+            Chunk chunk = location.getChunk();
+            if (!chunk.isEntitiesLoaded()) {
+                return; // Entities not loaded, skip
+            }
+
             Block block = location.getBlock();
-
-            // Apply the block state with automatic rotation based on direction
             state.applyToBlock(block, direction);
-
         } catch (Exception e) {
             LOGGER.log(Level.WARNING, "Failed to apply block state at " + position, e);
         }
