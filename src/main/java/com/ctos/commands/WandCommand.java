@@ -9,6 +9,10 @@ import com.ctos.trafficlight.service.IntersectionPersistence;
 import com.ctos.trafficlight.state.SetupSession;
 import com.ctos.trafficlight.state.WandState;
 import com.ctos.trafficlight.state.WandStateManager;
+import com.ctos.traincarts.model.BartStationConfig;
+import com.ctos.traincarts.service.BartStationManager;
+import com.ctos.traincarts.service.BartStationPersistence;
+import com.ctos.traincarts.state.BartSetupSession;
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
@@ -59,6 +63,7 @@ public class WandCommand {
                 .requires(requirement -> requirement.getSender().hasPermission("ctos.use"))
                 .then(buildTrafficLightSubcommand("tl"))
                 .then(buildTrafficLightSubcommand("trafficlights"))
+                .then(buildBartSubcommand())
                 .executes(context -> {
                     sendMainHelp(context.getSource().getSender());
                     return Command.SINGLE_SUCCESS;
@@ -137,6 +142,267 @@ public class WandCommand {
                     sendHelp(context.getSource().getSender());
                     return Command.SINGLE_SUCCESS;
                 });
+    }
+
+    /**
+     * Builds the BART station subcommand tree
+     */
+    private com.mojang.brigadier.builder.LiteralArgumentBuilder<CommandSourceStack> buildBartSubcommand() {
+        return Commands.literal("bart")
+                .then(Commands.literal("setup")
+                        .executes(context -> {
+                            handleBartSetup(context.getSource().getSender());
+                            return Command.SINGLE_SUCCESS;
+                        })
+                )
+                .then(Commands.literal("list")
+                        .executes(context -> {
+                            handleBartList(context.getSource().getSender());
+                            return Command.SINGLE_SUCCESS;
+                        })
+                )
+                .then(Commands.literal("remove")
+                        .then(Commands.argument("identifier", StringArgumentType.string())
+                                .suggests(this::bartConfigSuggestions)
+                                .executes(context -> {
+                                    String identifier = context.getArgument("identifier", String.class);
+                                    handleBartRemove(context.getSource().getSender(), identifier);
+                                    return Command.SINGLE_SUCCESS;
+                                })
+                        )
+                )
+                .then(Commands.literal("edit")
+                        .then(Commands.argument("identifier", StringArgumentType.string())
+                                .suggests(this::bartConfigSuggestions)
+                                .executes(context -> {
+                                    String identifier = context.getArgument("identifier", String.class);
+                                    handleBartEdit(context.getSource().getSender(), identifier);
+                                    return Command.SINGLE_SUCCESS;
+                                })
+                        )
+                )
+                .executes(context -> {
+                    sendBartHelp(context.getSource().getSender());
+                    return Command.SINGLE_SUCCESS;
+                });
+    }
+
+    /**
+     * Starts BART station setup
+     */
+    private void handleBartSetup(CommandSender sender) {
+        if (!(sender instanceof Player)) {
+            sender.sendMessage(Component.text("Only players can use this command").color(NamedTextColor.RED));
+            return;
+        }
+
+        Player player = (Player) sender;
+
+        if (!player.hasPermission("ctos.bart")) {
+            player.sendMessage(Component.text("You don't have permission to configure BART stations").color(NamedTextColor.RED));
+            return;
+        }
+
+        if (!plugin.isTrainCartsEnabled()) {
+            player.sendMessage(Component.text("TrainCarts integration is not enabled").color(NamedTextColor.RED));
+            return;
+        }
+
+        // Give wand item
+        ItemStack wand = WandState.createWand();
+        player.getInventory().addItem(wand);
+
+        // Start BART setup session
+        BartSetupSession session = wandStateManager.startBartSession(player);
+        session.sendPrompt(player);
+
+        player.sendMessage(Component.text("Starting BART station redstone configuration...").color(NamedTextColor.GREEN));
+    }
+
+    /**
+     * Lists all BART station configurations
+     */
+    private void handleBartList(CommandSender sender) {
+        if (!sender.hasPermission("ctos.use")) {
+            sender.sendMessage(Component.text("You don't have permission to list BART stations").color(NamedTextColor.RED));
+            return;
+        }
+
+        if (!plugin.isTrainCartsEnabled()) {
+            sender.sendMessage(Component.text("TrainCarts integration is not enabled").color(NamedTextColor.RED));
+            return;
+        }
+
+        BartStationManager manager = plugin.getBartStationManager();
+        if (manager == null) {
+            sender.sendMessage(Component.text("BART station system not initialized").color(NamedTextColor.RED));
+            return;
+        }
+
+        var configs = manager.getAllConfigs();
+
+        if (configs.isEmpty()) {
+            sender.sendMessage(Component.text("No BART station configurations").color(NamedTextColor.YELLOW));
+            return;
+        }
+
+        sender.sendMessage(Component.text("=== BART Station Configurations ===").color(NamedTextColor.GOLD));
+        for (BartStationConfig config : configs) {
+            String stationName = config.getStationName();
+            BlockPosition redstonePos = config.getRedstonePosition();
+            int delaySeconds = config.getDelayTicks() / 20;
+
+            // Edit button
+            Component editButton = Component.text("[Edit]")
+                    .color(NamedTextColor.GREEN)
+                    .decorate(TextDecoration.BOLD)
+                    .clickEvent(ClickEvent.runCommand("/ctos bart edit " + stationName))
+                    .hoverEvent(HoverEvent.showText(Component.text("Click to edit delay")));
+
+            // Remove button
+            Component removeButton = Component.text("[Remove]")
+                    .color(NamedTextColor.RED)
+                    .decorate(TextDecoration.BOLD)
+                    .clickEvent(ClickEvent.suggestCommand("/ctos bart remove " + config.getId()))
+                    .hoverEvent(HoverEvent.showText(Component.text("Click to remove this config")));
+
+            Component message = Component.text("- ")
+                    .color(NamedTextColor.GRAY)
+                    .append(Component.text(stationName)
+                            .color(NamedTextColor.YELLOW))
+                    .append(Component.text(" -> Delay: " + delaySeconds + "s, Redstone: " + redstonePos.getX() + "," + redstonePos.getY() + "," + redstonePos.getZ())
+                            .color(NamedTextColor.GRAY))
+                    .append(Component.text(" "))
+                    .append(editButton)
+                    .append(Component.text(" "))
+                    .append(removeButton);
+
+            sender.sendMessage(message);
+        }
+    }
+
+    /**
+     * Edits a BART station configuration (change delay)
+     */
+    private void handleBartEdit(CommandSender sender, String identifier) {
+        if (!(sender instanceof Player)) {
+            sender.sendMessage(Component.text("Only players can use this command").color(NamedTextColor.RED));
+            return;
+        }
+
+        Player player = (Player) sender;
+
+        if (!player.hasPermission("ctos.bart")) {
+            player.sendMessage(Component.text("You don't have permission to edit BART stations").color(NamedTextColor.RED));
+            return;
+        }
+
+        if (!plugin.isTrainCartsEnabled()) {
+            player.sendMessage(Component.text("TrainCarts integration is not enabled").color(NamedTextColor.RED));
+            return;
+        }
+
+        BartStationManager manager = plugin.getBartStationManager();
+        BartStationPersistence persistence = plugin.getBartStationPersistence();
+
+        if (manager == null || persistence == null) {
+            player.sendMessage(Component.text("BART station system not initialized").color(NamedTextColor.RED));
+            return;
+        }
+
+        // Try to find the config
+        BartStationConfig config = null;
+        try {
+            UUID id = UUID.fromString(identifier);
+            config = manager.getConfig(id).orElse(null);
+        } catch (IllegalArgumentException e) {
+            // Not a UUID, try by station name
+            config = manager.getByStationName(identifier);
+        }
+
+        if (config == null) {
+            player.sendMessage(Component.text("BART station configuration not found").color(NamedTextColor.RED));
+            return;
+        }
+
+        // Store config in session for editing
+        BartSetupSession session = wandStateManager.startBartEditSession(player, config);
+
+        player.sendMessage(Component.text("=== Editing BART Station: " + config.getStationName() + " ===").color(NamedTextColor.GOLD));
+        player.sendMessage(Component.text("Current delay: " + (config.getDelayTicks() / 20) + " seconds").color(NamedTextColor.GRAY));
+        player.sendMessage(Component.text("Redstone position: " + config.getRedstonePosition()).color(NamedTextColor.GRAY));
+        session.sendPrompt(player);
+    }
+
+    /**
+     * Removes a BART station configuration
+     */
+    private void handleBartRemove(CommandSender sender, String identifier) {
+        if (!sender.hasPermission("ctos.admin")) {
+            sender.sendMessage(Component.text("You don't have permission to remove BART station configs").color(NamedTextColor.RED));
+            return;
+        }
+
+        if (!plugin.isTrainCartsEnabled()) {
+            sender.sendMessage(Component.text("TrainCarts integration is not enabled").color(NamedTextColor.RED));
+            return;
+        }
+
+        BartStationManager manager = plugin.getBartStationManager();
+        BartStationPersistence persistence = plugin.getBartStationPersistence();
+
+        if (manager == null || persistence == null) {
+            sender.sendMessage(Component.text("BART station system not initialized").color(NamedTextColor.RED));
+            return;
+        }
+
+        // Try to parse as UUID first
+        try {
+            UUID id = UUID.fromString(identifier);
+            if (manager.hasConfig(id)) {
+                manager.removeConfig(id);
+                persistence.deleteConfig(id);
+                sender.sendMessage(Component.text("Removed BART station configuration").color(NamedTextColor.GREEN));
+                return;
+            }
+        } catch (IllegalArgumentException e) {
+            // Not a UUID, try by station name
+        }
+
+        // Try by station name
+        BartStationConfig config = manager.getByStationName(identifier);
+        if (config != null) {
+            manager.removeConfig(config.getId());
+            persistence.deleteConfig(config.getId());
+            sender.sendMessage(Component.text("Removed BART station configuration for: " + config.getStationName()).color(NamedTextColor.GREEN));
+        } else {
+            sender.sendMessage(Component.text("BART station configuration not found").color(NamedTextColor.RED));
+        }
+    }
+
+    /**
+     * Sends BART help message
+     */
+    private void sendBartHelp(CommandSender sender) {
+        sender.sendMessage(Component.text("=== ctOS BART Stations ===").color(NamedTextColor.GOLD));
+        sender.sendMessage(Component.text("/ctos bart setup").color(NamedTextColor.YELLOW)
+                .append(Component.text(" - Configure a BART station redstone trigger").color(NamedTextColor.GRAY)));
+        sender.sendMessage(Component.text("/ctos bart list").color(NamedTextColor.YELLOW)
+                .append(Component.text(" - List all BART station configurations").color(NamedTextColor.GRAY)));
+        sender.sendMessage(Component.text("/ctos bart edit <id|name>").color(NamedTextColor.YELLOW)
+                .append(Component.text(" - Edit a BART station configuration").color(NamedTextColor.GRAY)));
+        sender.sendMessage(Component.text("/ctos bart remove <id|name>").color(NamedTextColor.YELLOW)
+                .append(Component.text(" - Remove a BART station configuration").color(NamedTextColor.GRAY)));
+    }
+
+    private CompletableFuture<Suggestions> bartConfigSuggestions(CommandContext<CommandSourceStack> ctx, SuggestionsBuilder builder) {
+        if (plugin.getBartStationManager() != null) {
+            plugin.getBartStationManager().getAllConfigs().forEach(config -> {
+                builder.suggest(config.getId().toString());
+                builder.suggest(config.getStationName());
+            });
+        }
+        return builder.buildFuture();
     }
 
     /**
@@ -589,6 +855,8 @@ public class WandCommand {
                 .append(Component.text(" - Traffic lights module").color(NamedTextColor.GRAY)));
         sender.sendMessage(Component.text("/ctos trafficlights").color(NamedTextColor.YELLOW)
                 .append(Component.text(" - Traffic lights module (alias)").color(NamedTextColor.GRAY)));
+        sender.sendMessage(Component.text("/ctos bart").color(NamedTextColor.YELLOW)
+                .append(Component.text(" - BART station redstone triggers").color(NamedTextColor.GRAY)));
     }
 
     /**

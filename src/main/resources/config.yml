@@ -1,6 +1,7 @@
 # ctOS Configuration
 
 # Debug mode - enables detailed logging for troubleshooting
+# Includes BART train tracking, speed monitoring, and redstone activation logs
 debug: false
 
 # Default timing for new intersections (in ticks, 20 ticks = 1 second)

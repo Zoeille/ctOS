@@ -7,9 +7,12 @@ description: Dynamic synchronized traffic lights for Minecraft
 
 dependencies:
   server:
+    BKCommonLib:
+      load: BEFORE
+      required: true
     Train_Carts:
-      load: AFTER
-      required: false
+      load: BEFORE
+      required: true
 
 permissions:
   ctos.use:

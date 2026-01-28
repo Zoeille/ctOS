@@ -8,6 +8,11 @@ import com.ctos.trafficlight.state.SetupSession;
 import com.ctos.trafficlight.state.SetupStep;
 import com.ctos.trafficlight.state.WandState;
 import com.ctos.trafficlight.state.WandStateManager;
+import com.ctos.traincarts.model.BartStationConfig;
+import com.ctos.traincarts.service.BartStationManager;
+import com.ctos.traincarts.service.BartStationPersistence;
+import com.ctos.traincarts.state.BartSetupSession;
+import com.ctos.traincarts.state.BartSetupStep;
 import io.papermc.paper.event.player.AsyncChatEvent;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
@@ -58,6 +63,20 @@ public class WandInteractionListener implements Listener {
             return;
         }
 
+        // Check for BART session first
+        Optional<BartSetupSession> bartSessionOpt = wandStateManager.getBartSession(player);
+        if (bartSessionOpt.isPresent()) {
+            BartSetupSession bartSession = bartSessionOpt.get();
+            bartSession.touch();
+
+            if (event.getAction() == Action.RIGHT_CLICK_BLOCK) {
+                event.setCancelled(true);
+                handleBartBlockSelection(player, bartSession, event.getClickedBlock());
+            }
+            return;
+        }
+
+        // Check for traffic light session
         Optional<SetupSession> sessionOpt = wandStateManager.getSession(player);
         if (!sessionOpt.isPresent()) {
             return;
@@ -114,6 +133,67 @@ public class WandInteractionListener implements Listener {
 
         // Handle item frame selection
         handleItemFrameSelection(player, session, (ItemFrame) event.getRightClicked());
+    }
+
+    /**
+     * Handles block selection for BART station setup
+     */
+    private void handleBartBlockSelection(Player player, BartSetupSession session, Block block) {
+        BartSetupStep step = session.getCurrentStep();
+
+        switch (step) {
+            case SELECT_SIGN:
+                // Check if the block is a sign with sf-bart-station
+                if (block.getState() instanceof org.bukkit.block.Sign) {
+                    org.bukkit.block.Sign sign = (org.bukkit.block.Sign) block.getState();
+                    String line2 = sign.getLine(1).toLowerCase();
+                    if (line2.contains("sf-bart-station")) {
+                        // Get station name from line 3
+                        String stationName = sign.getLine(2).trim();
+                        if (stationName.isEmpty()) {
+                            player.sendMessage(Component.text("[ctOS BART] This sign has no station name on line 3!")
+                                    .color(NamedTextColor.RED));
+                            return;
+                        }
+
+                        // Check if this station already has a config
+                        BartStationManager manager = plugin.getBartStationManager();
+                        if (manager != null && manager.hasConfigForStation(stationName)) {
+                            player.sendMessage(Component.text("[ctOS BART] Station '" + stationName + "' already has a redstone configuration!")
+                                    .color(NamedTextColor.RED));
+                            return;
+                        }
+
+                        session.setStationName(stationName);
+                        player.sendMessage(Component.text("[ctOS BART] Station selected: " + stationName)
+                                .color(NamedTextColor.GREEN));
+                        session.advanceToNextStep();
+                        session.sendPrompt(player);
+                    } else {
+                        player.sendMessage(Component.text("[ctOS BART] This sign is not a sf-bart-station sign!")
+                                .color(NamedTextColor.RED));
+                    }
+                } else {
+                    player.sendMessage(Component.text("[ctOS BART] Please right-click on a sf-bart-station sign!")
+                            .color(NamedTextColor.RED));
+                }
+                break;
+
+            case SELECT_REDSTONE:
+                BlockPosition redstonePos = BlockPosition.fromLocation(block.getLocation());
+                session.setRedstonePosition(redstonePos);
+                player.sendMessage(Component.text("[ctOS BART] Redstone position selected at " +
+                        redstonePos.getX() + ", " + redstonePos.getY() + ", " + redstonePos.getZ())
+                        .color(NamedTextColor.GREEN));
+                session.advanceToNextStep();
+                session.sendPrompt(player);
+                break;
+
+            default:
+                player.sendMessage(Component.text("[ctOS BART] Cannot select blocks at this step.")
+                        .color(NamedTextColor.RED));
+                break;
+        }
     }
 
     /**
@@ -292,6 +372,36 @@ public class WandInteractionListener implements Listener {
     public void onPlayerChat(AsyncChatEvent event) {
         Player player = event.getPlayer();
 
+        // Extract text from the chat message
+        String input = PlainTextComponentSerializer.plainText().serialize(event.message());
+
+        // Check for BART session first
+        Optional<BartSetupSession> bartSessionOpt = wandStateManager.getBartSession(player);
+        if (bartSessionOpt.isPresent()) {
+            BartSetupSession bartSession = bartSessionOpt.get();
+            BartSetupStep bartStep = bartSession.getCurrentStep();
+
+            // Always allow "cancel" command
+            if (input.equalsIgnoreCase("cancel")) {
+                event.setCancelled(true);
+                bartSession.touch();
+                player.sendMessage(Component.text("[ctOS BART] Setup cancelled.")
+                        .color(NamedTextColor.YELLOW));
+                wandStateManager.removeBartSession(player);
+                WandState.removeWandFromInventory(player);
+                return;
+            }
+
+            // Only handle text input if the current step requires it
+            if (bartStep.requiresTextInput()) {
+                event.setCancelled(true);
+                bartSession.touch();
+                handleBartChatInput(player, bartSession, input);
+            }
+            return;
+        }
+
+        // Check for traffic light session
         Optional<SetupSession> sessionOpt = wandStateManager.getSession(player);
         if (!sessionOpt.isPresent()) {
             return;
@@ -299,9 +409,6 @@ public class WandInteractionListener implements Listener {
 
         SetupSession session = sessionOpt.get();
         SetupStep step = session.getCurrentStep();
-
-        // Extract text from the chat message
-        String input = PlainTextComponentSerializer.plainText().serialize(event.message());
 
         // Always allow "cancel" command regardless of step
         if (input.equalsIgnoreCase("cancel")) {
@@ -705,11 +812,92 @@ public class WandInteractionListener implements Listener {
         }
     }
 
+    /**
+     * Handles chat input for BART setup
+     */
+    private void handleBartChatInput(Player player, BartSetupSession session, String input) {
+        BartSetupStep step = session.getCurrentStep();
+
+        if (step == BartSetupStep.SET_DELAY) {
+            try {
+                int delaySeconds = Integer.parseInt(input.trim());
+                if (delaySeconds <= 0 || delaySeconds > 300) { // Max 5 minutes
+                    player.sendMessage(Component.text("[ctOS BART] Delay must be between 1 and 300 seconds!")
+                            .color(NamedTextColor.RED));
+                    return;
+                }
+                session.setDelaySeconds(delaySeconds);
+                player.sendMessage(Component.text("[ctOS BART] Delay set to " + delaySeconds + " seconds")
+                        .color(NamedTextColor.GREEN));
+                session.advanceToNextStep();
+                session.sendPrompt(player);
+            } catch (NumberFormatException e) {
+                player.sendMessage(Component.text("[ctOS BART] Invalid number! Enter a number between 1 and 300")
+                        .color(NamedTextColor.RED));
+            }
+        } else if (step == BartSetupStep.CONFIRM) {
+            if (input.equalsIgnoreCase("confirm")) {
+                // Save the configuration
+                if (!session.isComplete()) {
+                    player.sendMessage(Component.text("[ctOS BART] Configuration is incomplete!")
+                            .color(NamedTextColor.RED));
+                    return;
+                }
+
+                try {
+                    BartStationConfig config = session.toConfig();
+                    BartStationManager manager = plugin.getBartStationManager();
+                    BartStationPersistence persistence = plugin.getBartStationPersistence();
+
+                    if (manager != null && persistence != null) {
+                        // If editing, remove old config first
+                        if (session.isEditMode() && session.getExistingConfigId() != null) {
+                            manager.removeConfig(session.getExistingConfigId());
+                        }
+
+                        persistence.saveConfig(config);
+                        manager.registerConfig(config);
+
+                        String action = session.isEditMode() ? "updated" : "saved";
+                        player.sendMessage(Component.text("[ctOS BART] Configuration " + action + " successfully!")
+                                .color(NamedTextColor.GREEN));
+                        player.sendMessage(Component.text("[ctOS BART] Station: " + config.getStationName())
+                                .color(NamedTextColor.GRAY));
+                        player.sendMessage(Component.text("[ctOS BART] Redstone: " + config.getRedstonePosition())
+                                .color(NamedTextColor.GRAY));
+                        player.sendMessage(Component.text("[ctOS BART] Delay: " + (config.getDelayTicks() / 20) + " seconds")
+                                .color(NamedTextColor.GRAY));
+                    } else {
+                        player.sendMessage(Component.text("[ctOS BART] BART system not initialized!")
+                                .color(NamedTextColor.RED));
+                    }
+                } catch (Exception e) {
+                    LOGGER.log(Level.SEVERE, "Failed to save BART station config", e);
+                    player.sendMessage(Component.text("[ctOS BART] Error saving configuration: " + e.getMessage())
+                            .color(NamedTextColor.RED));
+                }
+
+                wandStateManager.removeBartSession(player);
+                WandState.removeWandFromInventory(player);
+
+            } else if (input.equalsIgnoreCase("cancel")) {
+                player.sendMessage(Component.text("[ctOS BART] Setup cancelled.")
+                        .color(NamedTextColor.YELLOW));
+                wandStateManager.removeBartSession(player);
+                WandState.removeWandFromInventory(player);
+            } else {
+                player.sendMessage(Component.text("[ctOS BART] Type 'confirm' to save, or 'cancel' to discard.")
+                        .color(NamedTextColor.YELLOW));
+            }
+        }
+    }
+
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
         Player player = event.getPlayer();
 
-        // Remove setup session when player quits
+        // Remove setup sessions when player quits
         wandStateManager.removeSession(player);
+        wandStateManager.removeBartSession(player);
     }
 }
